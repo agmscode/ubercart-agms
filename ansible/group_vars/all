@@ -1,0 +1,8 @@
+---
+server_hostname: localhost
+ubercart_version: 4.1.*
+ubercart_folder: ubercart
+php_fpm_socket: /var/run/php-fpm.sock
+database_name: ubercart
+database_user: ubercart
+database_password: myubercartdatabasepassword

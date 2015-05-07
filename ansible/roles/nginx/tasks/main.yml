@@ -1,0 +1,16 @@
+---
+- name: Install nginx
+  apt: pkg=nginx state=latest
+
+- name: Create nginx main configuration
+  template: src=nginx.conf dest=/etc/nginx/nginx.conf
+
+- name: Create ubercart nginx configuration
+  template: src=ubercart.conf dest=/etc/nginx/sites-available/ubercart.conf
+
+- name: Delete default nginx configuration
+  file: name=/etc/nginx/sites-enabled/default state=absent
+
+- name: Create link for nginx configuration
+  file: src=/etc/nginx/sites-available/ubercart.conf dest=/etc/nginx/sites-enabled/ubercart.conf state=link
+  notify: restart nginx

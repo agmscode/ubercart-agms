@@ -1,0 +1,17 @@
+---
+- name: Install MySQL server
+  sudo: yes
+  apt:  pkg=mysql-server-5.5 state=latest
+
+- name: Install Python MySQL DB
+  sudo: yes
+  apt:  pkg=python-mysqldb state=latest
+
+- name: Create MySQL database 
+  command: mysql -u root -e "CREATE DATABASE IF NOT EXISTS {{ database_name }};"
+
+- name: Add app user allow connect from anywhere to MySQL
+  command: mysql -u root -e "CREATE USER '{{ database_user }}'@'%' IDENTIFIED BY '{{ database_password }}'; FLUSH PRIVILEGES;"
+
+- name: Grant all privileges on app database
+  command: mysql -u root -e "GRANT ALL PRIVILEGES ON {{ database_name }}.* TO '{{ database_user }}'@'%'; FLUSH PRIVILEGES;"
