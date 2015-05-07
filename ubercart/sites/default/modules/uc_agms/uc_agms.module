@@ -1,0 +1,528 @@
+<?php
+
+/**
+ * @file
+ * Process payments using Agms Gateway. 
+ *
+ */
+
+define('UC_AGMS_GATEWAY_TRANSACTION_URL', 'https://gateway.agms.com/roxapi/agms.asmx');
+define('UC_AGMS_GATEWAY_HOSTED_FORM_URL', 'https://gateway.agms.com/roxapi/AGMS_HostedPayment.asmx');
+
+/**
+ * Implements hook_payment_gateway().
+ */
+function uc_agms_payment_gateway() {
+  $gateways[] = array(
+    'id' => 'agms',
+    'title' => t('Agms Gateway'),
+    'description' => t('Process credit card payments using the Agms Gateway.'),
+    'settings' => 'uc_agms_settings_form',
+    'credit' => 'uc_agms_charge',
+    'credit_txn_types' => array(UC_CREDIT_AUTH_ONLY, UC_CREDIT_PRIOR_AUTH_CAPTURE, UC_CREDIT_AUTH_CAPTURE),
+  );
+
+  return $gateways;
+}
+
+/**
+ * Callback for payment gateway settings.
+ */
+function uc_agms_settings_form() {
+  $login_data = _uc_agms_login_data();
+
+  $form['api_key'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('API Login Username and Password'),
+    '#description' => t('This information is required for Ubercart to interact with your payment gateway account.'),
+  );
+  $form['api_key']['uc_agms_username'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Agms Gateway Username'),
+    '#default_value' => variable_get('uc_agms_username', ''),
+  );
+  $form['api_key']['uc_agms_password'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Agms Gateway Password'),
+    '#default_value' => variable_get('uc_agms_password', ''),
+  );
+  $form['api_key']['uc_agms_gateway_transaction_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Agms Gateway Transaction URL'),
+    '#default_value' => variable_get('uc_agms_gateway_transaction_url',
+                                     UC_AGMS_GATEWAY_TRANSACTION_URL),
+  );
+  $form['api_key']['uc_agms_gateway_hosted_form_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Agms Gateway Hosted Form URL'),
+    '#default_value' => variable_get('uc_agms_gateway_hosted_form_url',
+                                     UC_AGMS_GATEWAY_HOSTED_FORM_URL),
+  );
+
+  
+  return $form;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function uc_agms_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'uc_payment_gateways_form') {
+    $form['#submit'][] = 'uc_agms_payment_gateway_settings_submit';
+  }
+}
+
+// Submit handler for payment gateway settings form to encrypt fields.
+function uc_agms_payment_gateway_settings_submit($form, &$form_state) {
+  // If CC encryption has been configured properly.
+  if ($key = uc_credit_encryption_key()) {
+    // Setup our encryption object.
+    $crypt = new uc_encryption_class();
+
+    // Encrypt the Login ID, Transaction key, and MD5 Hash.
+    if (!empty($form_state['values']['uc_agms_md5_hash'])) {
+      variable_set('uc_agms_md5_hash', $crypt->encrypt($key, $form_state['values']['uc_agms_md5_hash']));
+    }
+
+    // Store any errors.
+    uc_store_encryption_errors($crypt, 'uc_agms');
+  }
+}
+
+// Main handler for processing credit card transactions.
+function uc_agms_charge($order_id, $amount, $data) {
+  // Load the order.
+  $order = uc_order_load($order_id);
+
+  // Perform the appropriate action based on the transaction type.
+  switch ($data['txn_type']) {
+    // Accommodate all other transaction types.
+    default:
+      return _uc_agms_charge($order, $amount, $data);
+  }
+}
+
+
+/**
+ * Handles authorizations and captures through Transaction Process at Agms Gatewat
+ */
+function _uc_agms_charge($order, $amount, $data) {
+  global $user;
+
+  // Build a description of the order for logging in Auth.Net.
+  $description = array();
+  foreach ((array) $order->products as $product) {
+    $description[] = $product->qty .'x '. $product->model;
+  }
+
+  $billing_country = uc_get_country_data(array('country_id' => $order->billing_country));
+  $delivery_country = uc_get_country_data(array('country_id' => $order->delivery_country));
+
+  // Build the params for the transaction.
+  
+  $params = array(
+    // Merchant Information
+    'GatewayUserName' => variable_get('uc_agms_username', ''),
+    'GatewayPassword' => variable_get('uc_agms_password', ''),
+
+    // Transaction Information
+    'TransactionType' => 'sale',
+    'PaymentType' => 'creditcard',
+
+    // 'x_recurring_billing' => 'FALSE',
+    'Amount' => _uc_agms_format_amount($amount),
+    'CCNumber' => $order->payment_details['cc_number'],
+    'CCExpDate' => $order->payment_details['cc_exp_month'] . substr($order->payment_details['cc_exp_year'], -2),
+    'CVV' => $order->payment_details['cc_cvv'],
+    // 'x_trans_id' => '',
+    // 'x_auth_code' => '',
+    
+    // Order Information
+    'OrderID' => $order->order_id,
+    'OrderDescription' => substr(implode(', ', $description), 0, 255),
+
+    // Customer Information
+    'FirstName' => substr($order->billing_first_name, 0, 50),
+    'LastName' => substr($order->billing_last_name, 0, 50),
+    'Company' => substr($order->billing_company, 0, 50),
+    'Address' => substr($order->billing_street1, 0, 60),
+    'Address2' => substr($order->billing_street2, 0, 60),
+    'City' => substr($order->billing_city, 0, 40),
+    'State' => substr(uc_get_zone_code($order->billing_zone), 0, 40),
+    'Zip' => substr($order->billing_postal_code, 0, 20),
+    'Country' => !$billing_country ? '' : $billing_country[0]['country_iso_code_2'],
+    'Phone' => substr($order->billing_phone, 0, 25),
+    // 'x_fax' => substr('', 0, 25),
+    'Email' => substr($order->primary_email, 0, 255),
+    'PONumber' => substr($order->uid, 0, 20),
+    'IPAddress' => substr(ip_address(), 0, 15),
+
+    // Shipping Information
+    'ShippingFirstName' => substr($order->delivery_first_name, 0, 50),
+    'ShippingLastName' => substr($order->delivery_last_name, 0, 50),
+    'ShippingCompany' => substr($order->delivery_company, 0, 50),
+    'ShippingAddress' => substr($order->delivery_street1, 0, 60),
+    'ShippingAddress2' => substr($order->delivery_street2, 0, 60),
+    'ShippingCity' => substr($order->delivery_city, 0, 40),
+    'ShippingState' => substr(uc_get_zone_code($order->delivery_zone), 0, 40),
+    'ShippingSip' => substr($order->delivery_postal_code, 0, 20),
+    'ShippingCountry' => !$delivery_country ? '' : $delivery_country[0]['country_iso_code_2'],
+
+  );
+
+  if ($data['txn_type'] == UC_CREDIT_PRIOR_AUTH_CAPTURE) {
+    $submit_data['TransactionID'] = $data['auth_id'];
+  }
+
+  
+  $post_url = variable_get('uc_agms_gateway_transaction_url',
+                             UC_AGMS_GATEWAY_TRANSACTION_URL);
+  
+  $header = buildRequestHeader("ProcessTransaction");
+  $body = buildRequestBody($params, "ProcessTransaction");
+  watchdog('uc_agms', 'xml: @error', array('@error' => $body), WATCHDOG_ERROR);
+  // Setup the cURL request.
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $post_url);
+  curl_setopt($ch, CURLOPT_VERBOSE, 0);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_HTTPHEADER, $header);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 1);
+  curl_setopt($ch, CURLOPT_NOPROGRESS, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 0);
+  $result = curl_exec($ch);
+
+  // Log any errors to the watchdog.
+  if ($error = curl_error($ch)) {
+    watchdog('uc_agms', 'cURL error: @error', array('@error' => $error), WATCHDOG_ERROR);
+    return array('success' => FALSE);
+  }
+  curl_close($ch);
+
+  $response = parseResponse($result, "ProcessTransaction");
+
+  if (variable_get('uc_agms_response_debug', FALSE)) {
+    watchdog('uc_agms', 'Debug response: !data', array('!data' => '<pre>'. check_plain(print_r($response, TRUE)) .'</pre>'));
+  }
+
+  /**
+   * Response key index:
+   * 0 = Response Code
+   * 2 = Response Reason Code
+   * 3 = Response Reason Text
+   * 4 = Authorization Code
+   * 5 = Address Verification Service (AVS) Response
+   * 6 = Transaction ID; needed for CREDIT, PRIOR_AUTH_CAPTURE, and VOID transactions.
+   * 9 = Amount
+   * 11 = Transaction Type
+   * 32 = Tax Amount Charged
+   * 37 = Transaction Response MD5 Hash
+   * 38 = Card Code (CVV) Response
+   */
+
+  // If we didn't get an approval response code...
+  if ($response['STATUS_CODE'] != '1') {
+    // Fail the charge with the reason text in the decline message.
+    $result = array(
+      'success' => FALSE,
+      'message' => t('Credit card payment declined: @message', array('@message' => $response['STATUS_MSG'])),
+      'uid' => $user->uid,
+    );
+  }
+  else {
+    // Build a message for display and comments in the payments table.
+    $message = t('Transaction ID: @id', array('@id' => $response['TRANS_ID']));
+    $result = array(
+      'success' => TRUE,
+      'comment' => $message,
+      'message' => $message,
+      'data' => array('module' => 'uc_agms', 'txn_type' => $response[11], 'txn_id' => $response['TRANS_ID'], 'txn_authcode' => $response['AUTH_CODE'][0]),
+      'uid' => $user->uid,
+    );
+
+    // If this was an authorization only transaction...
+    if ($data['txn_type'] == UC_CREDIT_AUTH_ONLY) {
+      // Log the authorization to the order.
+      uc_credit_log_authorization($order->order_id, $response['TRANS_ID'], $amount);
+    }
+    elseif ($data['txn_type'] == UC_CREDIT_PRIOR_AUTH_CAPTURE) {
+      uc_credit_log_prior_auth_capture($order->order_id, $data['AUTH_CODE']);
+    }
+
+    
+  }
+
+  // Don't log this as a payment money wasn't actually captured.
+  if (in_array($data['txn_type'], array(UC_CREDIT_AUTH_ONLY))) {
+    $result['log_payment'] = FALSE;
+  }
+
+  // Build an admin order comment.
+  $context = array(
+    'revision' => 'formatted-original',
+    'type' => 'amount',
+  );
+  $comment = t('<b>@status:</b> @message<br />Amount: @amount<br />AVS response: @avs',
+    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@amount' => $params['Amount'], '@avs' => _uc_agms_avs($response['AVS_CODE'])));
+
+  
+  // Save the comment to the order.
+  uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+
+  return $result;
+}
+
+
+
+/**
+ * Convert array to xml string
+ * @param $request, $op
+ * @return string
+ */
+function buildRequestBody($request, $op='ProcessTransaction')
+{
+    /*
+     * Resolve object parameters
+     */
+    switch ($op) {
+        case 'ProcessTransaction':
+            $param = 'objparameters';
+            break;
+        case 'ReturnHostedPaymentSetup':
+            $param = 'objparameters';
+            break;
+    }
+    $xmlHeader = '<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+           xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+<soap:Body>
+<' . $op . ' xmlns="https://gateway.agms.com/roxapi/">
+  <' . $param . '>';
+    $xmlFooter = '</' . $param . '>
+</' . $op . '>
+</soap:Body>
+</soap:Envelope>';
+    $xmlBody = '';
+    foreach ($request as $key => $value) {
+        $xmlBody = $xmlBody . "<$key>$value</$key>";
+    }
+    $payload = $xmlHeader . $xmlBody . $xmlFooter;
+    return $payload;
+}
+
+/**
+ * Builds header for the Request
+ * @param $op
+ * @return array
+ */
+function buildRequestHeader($op='ProcessTransaction')
+{
+    return array(
+        'Accept: application/xml',
+        'Content-Type: text/xml; charset=utf-8',
+        'SOAPAction: https://gateway.agms.com/roxapi/' . $op,
+        'User-Agent: AGMS Ubercart Pluggin',
+        'X-ApiVersion: 3'
+    );
+}
+
+/**
+ * Parse response from Agms Gateway
+ * @param $response, $op
+ * @return array
+ */
+function parseResponse($response, $op)
+{
+    $xml = new SimpleXMLElement($response);
+    $xml = $xml->xpath('/soap:Envelope/soap:Body');
+    $xml = $xml[0];
+    $data = json_decode(json_encode($xml));
+    $opResponse = $op . 'Response';
+    $opResult = $op . 'Result';
+    $arr = object2array($data->$opResponse->$opResult);
+    return $arr;
+}
+
+
+/**
+ * Convert object to array
+ * @param $data
+ * @return array
+ */
+function object2array($data)
+{
+    if (is_array($data) || is_object($data)) {
+        $result = array();
+        foreach ($data as $key => $value) {
+            $result[$key] = object2array($value);
+        }
+        return $result;
+    }
+    return $data;
+}
+
+// Returns the message text for an AVS response code.
+function _uc_agms_avs($code) {
+  $text = $code .' - ';
+
+  switch ($code) {
+    case 'A':
+      $text .= t('Address (Street) matches, ZIP does not');
+      break;
+    case 'B':
+      $text .= t('Address information not provided for AVS check');
+      break;
+    case 'E':
+      $text .= t('AVS error');
+      break;
+    case 'G':
+      $text .= t('Non-U.S. Card Issuing Bank');
+      break;
+    case 'N':
+      $text .= t('No Match on Address (Street) or ZIP');
+      break;
+    case 'P':
+      $text .= t('AVS not applicable for this transaction');
+      break;
+    case 'R':
+      $text .= t('Retry – System unavailable or timed out');
+      break;
+    case 'S':
+      $text .= t('Service not supported by issuer');
+      break;
+    case 'U':
+      $text .= t('Address information is unavailable');
+      break;
+    case 'W':
+      $text .= t('Nine digit ZIP matches, Address (Street) does not');
+      break;
+    case 'X':
+      $text .= t('Address (Street) and nine digit ZIP match');
+      break;
+    case 'Y':
+      $text .= t('Address (Street) and five digit ZIP match');
+      break;
+    case 'Z':
+      $text .= t('Five digit ZIP matches, Address (Street) does not');
+      break;
+  }
+
+  return $text;
+}
+
+// Returns the message text for a CVV match.
+function _uc_agms_cvv($code) {
+  $text = $code .' - ';
+
+  switch ($code) {
+    case 'M':
+      $text .= t('Match');
+      break;
+    case 'N':
+      $text .= t('No Match');
+      break;
+    case 'P':
+      $text .= t('Not Processed');
+      break;
+    case 'S':
+      $text .= t('Should have been present');
+      break;
+    case 'U':
+      $text .= t('Issuer unable to process request');
+      break;
+  }
+
+  return $text;
+}
+
+// Returns the title of the transaction type.
+function _uc_agms_txn_type($type) {
+  switch (strtoupper($type)) {
+    case 'AUTH_CAPTURE':
+      return t('Authorization and capture');
+    case 'AUTH_ONLY':
+      return t('Authorization only');
+    case 'PRIOR_AUTH_CAPTURE':
+      return t('Prior authorization capture');
+    case 'CAPTURE_ONLY':
+      return t('Capture only');
+    case 'CREDIT':
+      return t('Credit');
+    case 'VOID':
+      return t('Void');
+  }
+}
+
+// Returns the Auth.Net transaction type corresponding to a UC type.
+function _uc_agms_txn_map($type) {
+  switch ($type) {
+    case UC_CREDIT_AUTH_ONLY:
+      return 'AUTH_ONLY';
+    case UC_CREDIT_PRIOR_AUTH_CAPTURE:
+      return 'PRIOR_AUTH_CAPTURE';
+    case UC_CREDIT_AUTH_CAPTURE:
+      return 'AUTH_CAPTURE';
+    case UC_CREDIT_CREDIT:
+      return 'CREDIT';
+    case UC_CREDIT_VOID:
+      return 'VOID';
+  }
+}
+
+
+
+// Decrypts the login data for using Auth.Net APIs.
+function _uc_agms_login_data() {
+  static $data;
+
+  if (!empty($data)) {
+    return $data;
+  }
+
+  $md5_hash = variable_get('uc_authnet_md5_hash', '');
+
+  // If CC encryption has been configured properly.
+  if ($key = uc_credit_encryption_key()) {
+    // Setup our encryption object.
+    $crypt = new uc_encryption_class();
+
+    // Decrypt the MD5 Hash.
+    if (!empty($md5_hash)) {
+      $md5_hash = $crypt->decrypt($key, $md5_hash);
+    }
+
+    // Store any errors.
+    uc_store_encryption_errors($crypt, 'uc_agms');
+  }
+
+  $data = array(
+    'md5_hash' => $md5_hash,
+  );
+
+  return $data;
+}
+
+/**
+ * Formats an amount for submission to Authorize.net.
+ *
+ * @param $amount
+ * The raw amount being submitted.
+ *
+ * @return mixed
+ * The amount formatted and rounded for use with Authorize.net.
+ */
+function _uc_agms_format_amount($amount) {
+  $context = array(
+    'revision' => 'formatted-original',
+    'type' => 'amount',
+  );
+  $options = array(
+    'sign' => FALSE,
+    'thou' => FALSE,
+    'dec' => '.',
+  );
+  return uc_price($amount, $context, $options);
+}
