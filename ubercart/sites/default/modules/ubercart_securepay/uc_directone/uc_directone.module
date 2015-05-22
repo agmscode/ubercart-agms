@@ -1,0 +1,318 @@
+<?php
+/**
+ * uc_securepay_hosted.module
+ *
+ * Creates DirectOne transactions at checkout
+ */
+
+/****
+ * Hook Functions (Drupal)
+ ***/
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_directone_menu()
+{
+	$items['directone/finished'] = array(
+		'title' => 'Payment complete',
+		'page callback' => 'uc_directone_finish', 
+		'access arguments' => array('access content'), 
+		'type' => MENU_CALLBACK
+	);
+	$items['directone/complete'] = array(
+		'title' => 'Payment complete',
+		'page callback' => 'uc_directone_complete', 
+		'access arguments' => array('access content'), 
+		'type' => MENU_CALLBACK
+	);
+
+	return $items;
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function uc_directone_form_alter(&$form, &$form_state, $form_id)
+{
+	if ($form_id=='uc_cart_checkout_review_form' && ($order_id = intval($_SESSION['cart_order']))>0)
+	{
+		$order = uc_order_load($order_id);
+		if ($order->payment_method == 'directone')
+		{
+			global $user, $response;
+			$test = (variable_get('directone_test', 'test')!=test?true:false);
+			$url = 'https://vault.safepay.com.au/cgi-bin/'.($test?'make':'test').'_payment.pl';
+			
+			$description = '';
+			$price = 0;
+			$secure = (variable_get('directone_secure', 'no')=='no'?false:true);
+			
+			if (is_array($order->products))
+			{
+				$amount = $order->order_total;
+				
+				$form['#action'] = $url;
+				
+				$country = uc_get_country_data(array('country_id' => $order->billing_country));
+				
+				$submit_data = array(
+					'vendor_name' => variable_get('directone_login_id', ''),
+					'Name' => substr($order->billing_first_name,0,50) . ' ' . substr($order->billing_last_name,0,50),
+					'Company' => substr($order->billing_company,0,50),
+					'Address' => substr($order->billing_street1,0,60),
+					'City' => substr($order->billing_city,0,40),
+					'State' => substr(uc_get_zone_code($order->billing_zone),0,40),
+					'Postcode' => substr($order->billing_postal_code,0,20),
+					'Country' => $country[0]['country_name'],
+					'information_fields' => 'Name,Company,Address,City,State,Postcode,Country',
+					'suppress_field_names' => 'op,sescrd,form_id,form_build_id,form_token',
+				);
+				
+				/* Simple mode should just give a summary total. Non-simple mode lists all of the items & charges. */
+				if($simple == false)
+				{
+					$tax = 0;
+					if (module_exists('uc_taxes'))
+					{
+						foreach (uc_taxes_calculate($order) as $tax_item)
+						{
+							$tax += $tax_item->amount;
+						}
+					}
+					
+					/* We're making the assumption that any taxes are GST, so shipping costs are also taxed. If not, some modifications will need to be made. */
+					if($tax>0)
+					{
+						$price += $tax;
+						$subtotal = $amount - $tax;
+						$tax_rate = ($tax / $subtotal) * 100;
+					}
+					
+					foreach ($submit_data as $name => $value)
+					{
+						$form[$name] = array('#type' => 'hidden', '#value' => htmlspecialchars($value), '#name' => $name);
+					}
+					
+					foreach ($order->products as $product)
+					{
+						$form[$product->title] = array('#type' => 'hidden', '#value' => ''.$product->qty.','.$product->price);
+						$price += $product->price*$product->qty;
+					}
+					
+					if($amount > $price)
+					{
+						$form['shipping/handling'] = array('#type' => 'hidden', '#value' => '1,'.($amount-$price));
+					}
+					else if ($amount < $price)
+					{
+						$form['Discount'] = array('#type' => 'hidden', '#value' => '1,'.($amount-$price));
+					}
+					
+					if($tax_rate > 0)
+					{
+						$form['gst_rate'] = array('#type' => 'hidden', '#value' => ''.$tax_rate);
+					}
+				}
+				else
+				{
+					$form['Order '.$order->order_id] = array('#type' => 'hidden', '#value' => '1,'.$amount);
+				}
+				
+				$prefix = (variable_get('clean_url',0)?'?':'&');
+				$return_url = url('directone/finished',array('absolute'=>true)).$prefix.'order_id='.$order->order_id.'&response_amount=';
+				$form['return_link_url'] = array('#type'=>'hidden','#value' => $return_url);
+				
+				if($secure)
+				{
+					$reply_url = url('directone/complete',array('absolute'=>true)).$prefix.'order_id='.$order->order_id.'&response_amount=';
+					$form['reply_link_url'] = array('#type'=>'hidden','#value' => $reply_url);
+				}
+				
+				$form['submit'] = array(
+					'#type' => 'submit',
+					'#value' => t('Submit Order'),
+				);
+			}
+			else
+			{
+				drupal_set_message('<pre>Missing product array?</pre>');
+			}
+		}
+	}
+}
+
+/****
+ * Hook Functions (Ubercart)
+ ***/
+
+/**
+ * Implementation of hook_payment_method().
+ */
+function uc_directone_payment_method()
+{
+	$path = base_path() . drupal_get_path('module', 'uc_directone');
+	$title = variable_get('uc_directone_title', t('Credit Card'));
+	
+	$methods[] = array(
+		'id' => 'directone',
+		'name' => t('DirectOne'),
+		'title' => $title,
+		'callback' => 'uc_payment_method_directone',
+		'weight' => 3,
+		'checkout' => TRUE,
+		'no_gateway' => TRUE,
+	);
+
+	return $methods;
+}
+
+/****
+ * Callback Functions, Forms, and Tables
+ ***/
+
+/**
+ * Callback for payment gateway settings.
+ */
+function uc_payment_method_directone($op, &$arg1)
+{
+	switch ($op)
+	{
+		case 'cart-process':
+			$_SESSION['pay_method'] = $_POST['pay_method'];
+			break;
+
+		case 'settings':
+			$form['directone_settings'] = array(
+				'#type' => 'fieldset',
+				'#title' => t('SIM settings'),
+			);
+			
+			$form['directone_settings']['directone_login_id'] = array(
+				'#type' => 'textfield',
+				'#title' => t('Vendor ID'),
+				'#default_value' => variable_get('directone_login_id', ''),
+				'#description' => t('Your DirectOne vendor name'),
+			);
+			
+			$form['directone_settings']['directone_test'] = array(
+				'#type' => 'select',
+				'#title' => t('Test mode'),
+				'#description' => t('Run in test mode?'),
+				'#options' => array(
+					'test' => t('Yes'),
+					'live' => t('No'),
+				),
+				'#default_value' => variable_get('directone_test', 'test'),
+			);
+			$form['directone_settings']['directone_secure'] = array(
+				'#type' => 'select',
+				'#title' => t('Secure mode'),
+				'#description' => t('Run in secure mode? This requires the server to be accessible by DirectOne (i.e. needs a public IP or domain name).'),
+				'#options' => array(
+					'no' => t('No'),
+					'yes' => t('Yes'),
+				),
+				'#default_value' => variable_get('directone_secure', 'no'),
+			);
+			
+			return $form;
+		
+		default:
+			break;
+	}
+}
+
+/**
+ * uc_directone_finish
+ *
+ * This is the callback for the landing page from DirectOne. If we're in insecure mode, this page must be loaded to update the payment records. In secure mode, DirectOne will call uc_directone_complete to update the payment records, and this page is just decoration.
+ *
+ * It should have two GET variables: order_id and total:
+ * 	order_id is the order to act on,
+ *	total is the total amount paid
+ */
+function uc_directone_finish()
+{
+	$order_id = check_plain($_GET['order_id']);
+	
+	/* Are we using DirectOne initiated requests for verification, or just user requests? The former is more secure, but not possible in some test situations. i.e. Servers that aren't public-facing. */
+	$secure = (variable_get('directone_secure', 'no')=='no'?false:true);
+	$_SESSION['do_complete'] = true;
+
+	if (!($order = uc_order_load($order_id)))
+	{
+		return;
+	}
+
+	if($secure)
+	{
+		if (intval($_SESSION['cart_order']) != $order_id)
+		{
+			$_SESSION['cart_order'] = $order_id;
+		}
+		
+		/* The order shouldn't still be in checkout by now: it should be paid or pending. */
+		if($order->order_status == t('in_checkout'))
+		{
+			$comment = t('Didn\'t receive a callback from DirectOne. Check bank records to confirm that this payment was received');
+			uc_order_comment_save($order_id, $user->uid, $comment, 'admin');
+		}
+	}
+	else
+	{
+		if($order->order_status == t('in_checkout'))
+		{
+			$amount = (check_plain($_GET['response_amount'])/100);
+			
+			if($amount == false)
+			{
+				$amount = 0;
+			}
+			$comment = t('Payment via DirectOne / $@amount of $@total (Insecure mode: check bank records for confirmation)', array('@amount' => $amount, '@total' => $order->order_total));
+			
+			uc_payment_enter($order_id, 'DirectOne', $amount, 0, NULL, $comment);
+			uc_order_comment_save($order_id, $user->uid, $comment, 'admin');
+		}
+		else
+		{
+			watchdog('DirectOne',t('@ip attempted to reprocess order_id @order. Ignored request.', array('@ip' => ip_address(), '@order' => $order->order_id)));
+			$_SESSION['do_complete'] = false;
+		}
+	}
+	
+	/* Redirect to the order completion page, or the cart, if do_complete is false */
+	drupal_goto('cart/checkout/complete');
+}
+
+/**
+ * uc_directone_complete
+ *
+ * This is the callback for the DirectOne-only payment completion page; if successful, it marks an order as paid. In insecure mode, this page is never accessed. In secure mode, DirectOne will request this page with the order details and total in GET. The caller is logged for review, because merchants will need to confirm DirectOne as the caller before processing the order.
+ */
+function uc_directone_complete($cart_id = 0)
+{
+	$ip = ip_address();
+	$host = gethostbyaddr($ip);
+	
+	$order_id = check_plain($_GET['order_id']);
+	$amount = (check_plain($_GET['response_amount'])/100);
+	watchdog('DirectOne', t('Receiving new order notification for order !order_id from !host.', array('!order_id' => $order_id, '!host' => $host)));
+	
+	if (!($order = uc_order_load($order_id)))
+	{
+		return;
+	}
+	
+	/* It's safe to act on this request if we get this far, and the order is still in checkout. */
+	if($order->order_status == t('in_checkout'))
+	{
+		$comment = t('Payment via DirectOne [@host] ($@amount of $@total)', array('@host' => $host, '@amount' => $amount, '@total' => $order->order_total));
+		uc_payment_enter($order_id, 'DirectOne', $amount, 0, NULL, $comment);
+		uc_order_comment_save($order_id, $user->uid, $comment, 'admin');
+	}
+	else
+	{
+		watchdog('DirectOne',t('@ip attempted to reprocess order_id @order. Ignored request.', array('@ip' => ip_address(), '@order' => $order->order_id)));
+	}
+}

@@ -1,0 +1,58 @@
+<?php
+// $Id: $
+
+/**
+ * @file
+ * Handles installing, uninstalling, and updating Agms Payment Gateway settings.
+ */
+
+/**
+ * Implements hook_requirements().
+ */
+function uc_agms_hpp_requirements($phase) {
+  $t = get_t();
+
+  $has_curl = function_exists('curl_init');
+
+  $requirements['uc_agms_hpp_curl'] = array(
+    'title' => $t('cURL'),
+    'value' => $has_curl ? $t('Enabled') : $t('Not found'),
+  );
+  if (!$has_curl) {
+    $requirements['uc_agms_hpp_curl']['severity'] = REQUIREMENT_ERROR;
+    $requirements['uc_agms_hpp_curl']['description'] = $t("Agms HPP Payment Gateway requires the PHP <a href='!curl_url'>cURL</a> library.", array('!curl_url' => 'http://php.net/manual/en/curl.setup.php'));
+  }
+
+  if(!@include(drupal_get_path('module', 'uc_agms_hpp') . "/agms.php")) {
+    $requirements['uc_agms_hpp_curl']['severity'] = REQUIREMENT_ERROR;
+    $requirements['uc_agms_hpp_curl']['description'] = $t("Agms HPP Payment Gateway Class agms.php missing.");
+  }
+  return $requirements;
+}
+
+/**
+ * Implements hook_install().
+ */
+function uc_agms_hpp_install()
+{
+  variable_set('uc_agms_gateway_hpp_cc_txn_type', UC_CREDIT_AUTH_ONLY);
+}
+
+
+/**
+ * Implements hook_uninstall().
+ */
+function uc_agms_hpp_uninstall() {
+  // Delete related variables all at once.
+  db_query("DELETE FROM {variable} WHERE name LIKE 'uc_agms_gateway_hpp_%%'");
+}
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function uc_agms_hpp_update_last_removed() {
+  return 3;
+}
+
+
+

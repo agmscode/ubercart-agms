@@ -1,0 +1,646 @@
+<?php
+// $Id: $
+
+/**
+ * Processes payments via the SecurePay (AU) XML API.
+ *
+ * Requires:
+ *		A merchant account with SecurePay (http://securepay.com.au)
+ *		Ubercart 2.0
+ *		PHP cURL
+ *		uc_recurring 2.0, for optional recurring payments
+ *
+ * Mostly just passes the relevant details to and from the securepay_xml_transaction class in securepay_xml_api.php.
+ *
+ * @author Andrew Dubbeld (support@securepay.com.au)
+ * @date 26-Oct-2009
+ * @license GPL V2.0
+ *
+ * @notes Partially derived from the uc_securepayau module by univate
+ */
+
+require_once('securepay_xml_api.php');
+
+define('SP_LOCAL_ID_STRING', 'Ubercart 1.8,091021');
+
+
+/****
+ * UberCart Hooks
+ ***/
+
+/**
+ * Implementation of hook_payment_gateway().
+ *
+ * Registers module as a payment gateway, and sets up payment types and callbacks.
+ */
+function uc_securepayxml_payment_gateway()
+{
+  $gateways[] = array(
+    'id' => 'securepayxml',
+    'title' => t('SecurePay XML API (AU)'),
+    'description' => t('Process credit card payments using the SecurePay (AU) gateway'),
+    'settings' => 'uc_securepayxml_settings_form',
+    'credit' => 'uc_securepayxml_charge',
+    'credit_txn_types' => array(
+			UC_CREDIT_AUTH_ONLY, 				//Preauth
+			UC_CREDIT_PRIOR_AUTH_CAPTURE,	 			//Advice
+			UC_CREDIT_AUTH_CAPTURE, 		//Standard
+			UC_CREDIT_CREDIT, 					//Refund
+			UC_CREDIT_VOID, 						//Reverse
+		),
+  );
+
+  return $gateways;
+}
+
+/**
+ * Implements hook_charge()
+ *
+ * Main handler for processing credit card transactions.
+ */
+function uc_securepayxml_charge($order_id, $amount, $data)
+{
+	$order = uc_order_load($order_id);
+	global $user;
+
+	$result = array(
+		'success' => FALSE,
+		'comment' => 'Invalid transaction type',
+		'message' => 'Invalid transaction type',
+		'data' => array(
+			'module' => 'uc_securepayxml', 
+			'transaction_id' => 0,
+		),
+		'uid' => $user->uid,
+		'log_payment' => 0,
+	);
+	
+	// Perform the appropriate action based on the transaction type.
+	switch ($data['txn_type'])
+	{
+		case UC_CREDIT_PRIOR_AUTH_CAPTURE:			//Advice
+			$result = _uc_securepayxml_advice($order,$amount,$data);
+			break;
+			
+		case UC_CREDIT_CREDIT: 				 					//Refund
+			$result = _uc_securepayxml_refund($order,$amount,$data);
+			break;
+			
+		case UC_CREDIT_VOID: //Cancel preauth
+			$result = _uc_securepayxml_cancel_auth($order,$amount,$data);
+			break;
+		
+		case UC_CREDIT_AUTH_ONLY: 			 				//Preauth
+		case UC_CREDIT_AUTH_CAPTURE: 						//Standard
+			$result = _uc_securepayxml_charge($order, $amount, $data);
+			break;
+			
+		default:
+			break;
+	}
+	
+	return $result;
+}
+
+/****
+ * Drupal Core Hooks
+ ***/
+
+/**
+ * Callback for payment gateway settings. Populates the admin settings form.
+ */
+function uc_securepayxml_settings_form()
+{
+	$form['api'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('SecurePay (AU) Merchant ID and password'),
+		'#description' => t('This information is required for Ubercart to interact with SecurePay. Contact <a href="http://securepay.com.au">SecurePay</a> support if you do not have these details'),
+	);
+
+	$form['api']['uc_securepayxml_merch_id'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Merchant ID'),
+		'#default_value' => variable_get('uc_securepayxml_merch_id', ''),
+	);
+
+	$form['api']['uc_securepayxml_merch_pass'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Password'),
+		'#default_value' => variable_get('uc_securepayxml_merch_pass', ''),
+	);
+
+	$form['settings'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Mode/Settings'),
+		'#description' => t('This allows you to set settings for the SecurePay account you are accessing'),
+	);	
+
+	$form['settings']['uc_securepayxml_currency'] = array(
+		'#type' => 'select',
+		'#title' => 'Currency',
+		'#default_value' => variable_get('uc_securepayxml_currency', variable_get('uc_currency_code', 'AUD')),
+		'#options' => array(
+			'AUD' => 'AUD', 
+			'USD' => 'USD',
+		),
+	);
+
+	$account_types = array(
+		'live' => t('Live mode'),
+		'test' => t('Test mode'),
+	);
+
+	$form['settings']['uc_securepayxml_mode'] = array(
+		'#type' => 'select',
+		'#title' => t('Gateway mode'),
+		'#description' => t('Choose between live and test modes. Use test mode to ensure that everything is working correctly, and live mode for when you\'re ready to receive real money from transactions. The Merchant ID and password are different for each mode'),
+		'#options' => $account_types,
+		'#default_value' => variable_get('uc_securepayxml_mode', 'test'),
+	);
+
+	$form['settings']['uc_securepayxml_preauth'] = array(
+		'#type' => 'select',
+		'#title' => t('Transaction mode'),
+		'#description' => t('Select Standard if you want a customer\'s card to be charged at the point of sale. Select Preauthorised if you\'d like to review the order first, and manually issue the charge later via the orders page'),
+		'#options' => array('standard'=>'Standard Payment','preauth'=>'Preauthorised Payment',),
+		'#default_value' => variable_get('uc_securepayxml_preauth', 'test'),
+	);
+
+	return $form;
+}
+
+/**
+ * _uc_securepayxml_setData
+ *
+ * Saves the transaction id & mode to the database, for refunds
+ */
+function _uc_securepayxml_setData($order_id, $transaction_id, $type)
+{
+	// Load the existing order data array.
+	$data = db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $order_id));
+	$data = unserialize($data);
+
+	// Return FALSE if we can't find the payment
+	if (empty($data))
+	{
+		return FALSE;
+	}
+
+	$data['transaction_id'] = $transaction_id;
+	$data['type'] = $type;
+
+	// Save the updated data array to the database.
+	db_query("UPDATE {uc_orders} SET data = '%s' WHERE order_id = %d", serialize($data), $order_id);
+
+	return true;
+}
+
+/**
+ * _uc_securepayxml_getTransactionID
+ *
+ * Pulls the transaction id from the database, for refunds
+ */
+function _uc_securepayxml_getTransactionID($order_id)
+{
+	// Load the existing order data array.
+	$data = db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $order_id));
+	$data = unserialize($data);
+
+	// Return FALSE if we can't find the payment
+	if (empty($data))
+	{
+		return FALSE;
+	}
+
+	return $data['transaction_id'];
+}
+
+/**
+ * _uc_securepayxml_getType
+ *
+ * Pulls the payment type from the database, for consistency checks in refund
+ */
+function _uc_securepayxml_getType($order_id)
+{
+	// Load the existing order data array.
+	$data = db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $order_id));
+	$data = unserialize($data);
+
+	// Return FALSE if we can't find the payment
+	if (empty($data))
+	{
+		return FALSE;
+	}
+
+	return $data['type'];
+}
+
+/**
+ * _uc_securepayxml_charge
+ *
+ * Submits preauth and standard payments to the gateway.
+ */
+function _uc_securepayxml_charge($order, $amount, $data)
+{
+	global $user;
+
+	$test = (variable_get('uc_securepayxml_mode', 'test')=='live'?false:true);
+	$preauth = ($data['txn_type']==UC_CREDIT_AUTH_ONLY?true:false);
+	$mode = ($test?SECUREPAY_GATEWAY_MODE_TEST:SECUREPAY_GATEWAY_MODE_LIVE);
+	$txntype = ($preauth?t('Preauthorisation'):t('Standard payment'));
+	
+	$txn = new securepay_xml_transaction($mode, variable_get('uc_securepayxml_merch_id',''), variable_get('uc_securepayxml_merch_pass',''), SP_LOCAL_ID_STRING);
+	
+	if($preauth)
+	{
+		$response = $txn->processCreditPreauth($amount,$order->order_id,$order->payment_details['cc_number'],$order->payment_details['cc_exp_month'],$order->payment_details['cc_exp_year'],$order->payment_details['cc_cvv'],variable_get('uc_securepayxml_currency', 'AUD'));
+	}
+	else
+	{
+		$response = $txn->processCreditStandard($amount,$order->order_id,$order->payment_details['cc_number'],$order->payment_details['cc_exp_month'],$order->payment_details['cc_exp_year'],$order->payment_details['cc_cvv'],variable_get('uc_securepayxml_currency', 'AUD'));
+	}
+	
+	$txnResultCodeText = $txn->getErrorString();
+	$approved = (strtoupper($txn->getResultByKeyName('approved'))=='YES'?true:false);
+	
+	$message = ($approved?t('Approved'):$txnResultCodeText);
+	
+	$result = array(
+		'success' => $approved,
+		'comment' => $message,
+		'message' => $message,
+		'data' => array(
+			'module' => 'uc_securepayxml', 
+			'transaction_id' => ($preauth?$txn->getResultByKeyName('banktxnID'):$response),
+			'preauth_id' => ($preauth?$response:""),
+		),
+		'uid' => $user->uid,
+		'log_payment' => ($preauth?false:true),
+	);
+	
+	// Build an admin order comment.
+	$comment = t(
+		'<b>@type</b><br />
+		 @message<br />
+		 Amount: $@amount<br />
+		 Credit Card: @cc',
+		array(
+			'@type' => $txntype,
+			'@message' => $message,
+			'@amount' => $amount,
+			'@cc' => $txn->getResultByKeyName('creditCardPAN'),
+			'@expiry' => $response['expiryDate'],
+			'@cardtype' => $response['cardDescription'],
+		)
+	);
+	
+	if($preauth)
+	{
+		uc_credit_log_authorization($order->order_id, $response, $amount);
+	}
+	else
+	{
+		_uc_securepayxml_setData($order->order_id,$response,$mode);
+	}
+	// Save the comment to the order.
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	
+	return $result;
+}
+
+/**
+ * _uc_securepayxml_cancel_auth
+ *
+ * Clears a preauthorisation by submitting it (internally, not to the gateway) with an amount of $0.
+ */
+function _uc_securepayxml_cancel_auth($order,$amount,$data)
+{
+	global $user;
+	$success = false;
+	
+	$id = $data['auth_id'];
+	
+	if($id)
+	{
+		$message = t('Preauthorisation was cancelled');
+		$success = true;
+	}
+	else
+	{
+		$message = t('Preauthorisation was not cancelled: preauth ID is missing');
+	}
+  $result = array(
+		'success' => $success,
+		'comment' => $message,
+		'message' => $message,
+		'data' => array(
+			'module' => 'uc_securepayxml', 
+		),
+		'uid' => $user->uid,
+		'log_payment' => false,
+	);
+	
+  // Build an admin order comment.
+  $comment = t(
+		'@type @id',
+		array(
+			'@type' => $message, 
+			'@id' => $id,
+		)
+	);
+
+	uc_credit_log_prior_auth_capture($order->order_id, $id);
+	
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	
+	return $result;
+}
+
+/**
+ * _uc_securepayxml_refund
+ *
+ * Issues a refund on a standard credit/advice transaction.
+ * 
+ * Does not work on periodic transactions (i.e. Recurring), use the SecurePay MMF for this. 
+ */
+function _uc_securepayxml_refund($order,$amount,$data)
+{
+	$test = (variable_get('uc_securepayxml_mode', 'test')=='live'?false:true);
+	$type = _uc_securepayxml_getType($order->order_id);
+	$mode = ($test?SECUREPAY_GATEWAY_MODE_TEST:SECUREPAY_GATEWAY_MODE_LIVE);
+	$txntype = t('Refund');
+	$approved = false;
+	$response = "";
+	
+	if((int)$type != $mode)
+	{
+		drupal_set_message(t('Incompatible transaction type: refunds can only be processed when the module is in the same mode it was when the transaction was processed. i.e. It is not possible to refund a test transaction in live mode, or vice versa. This module is also unable to refund a recurring/triggered payments (use the <a href="http://securepay.com.au">SecurePay</a> merchant login instead)</a>'),'error');
+		$message = t('Incompatible transaction type for refund');
+	}
+	else
+	{
+		$txn = new securepay_xml_transaction($mode, variable_get('uc_securepayxml_merch_id',''), variable_get('uc_securepayxml_merch_pass',''), SP_LOCAL_ID_STRING);
+		
+		$transaction_id = _uc_securepayxml_getTransactionID($order->order_id);
+		
+		if($transaction_id)
+		{
+			$response = $txn->processCreditRefund($amount,$order->order_id,$transaction_id);
+			$status = $txn->getResultByKeyName('responseCode');
+			
+			$txnResultCodeText = $txn->getErrorString();
+			$approved = strtoupper($txn->getResultByKeyName('approved'))=='YES'?true:false;
+			
+			$message = t('Refund approved');
+			
+			$message = ($approved?$message:$txnResultCodeText);
+		}
+		else
+		{
+			$message = t('Couldn\'t find transaction to refund');
+		}
+		
+		if($approved)
+		{
+			$data = array();
+			uc_payment_enter($order->order_id, 'credit', 0-$amount, $order->uid, $data, $message);
+		}
+	}
+	
+  $result = array(
+		'success' => $approved,
+		'comment' => $message,
+		'message' => $message,
+		'data' => array(
+			'module' => 'uc_securepayxml',
+			'transaction_id' => $response,
+		),
+		'uid' => $user->uid,
+		'log_payment' => false,
+	);
+	
+  $comment = t(
+		'<b>@type</b><br />
+		 @message<br />
+		 Amount: $@amount<br />',
+		array(
+			'@type' => $txntype,
+			'@message' => $message,
+			'@amount' => $amount,
+		)
+	);
+	
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	
+  return $result;
+}
+
+/**
+ * uc_securepayxml_advice
+ *
+ * Issues an advice/complete transaction. Usually called from the admin interface. Will only work on preauthorised orders which have $data['auth_id'] set.
+ */
+function _uc_securepayxml_advice($order,$amount,$data)
+{
+	$test = (variable_get('uc_securepayxml_mode', 'test')=='live'?false:true);
+	$mode = ($test?SECUREPAY_GATEWAY_MODE_TEST:SECUREPAY_GATEWAY_MODE_LIVE);
+	$txn = new securepay_xml_transaction($mode, variable_get('uc_securepayxml_merch_id',''), variable_get('uc_securepayxml_merch_pass',''), SP_LOCAL_ID_STRING);
+	$txntype = t('Complete');
+	$preauth_id = $data['auth_id'];
+	
+	$response = $txn->processCreditAdvice($amount,$order->order_id,$preauth_id);
+	
+	$txnResultCodeText = $txn->getErrorString();
+	$approved = strtoupper($txn->getResultByKeyName('approved'))=='YES'?true:false;
+	
+	$message = ($approved?t('Approved'):$txnResultCodeText);
+	
+  $result = array(
+		'success' => $approved,
+		'comment' => $message,
+		'message' => $message,
+		'data' => array(
+			'module' => 'uc_securepayxml', 
+			'transaction_id' => $response,
+		),
+		'uid' => $user->uid,
+		'log_payment' => $approved,
+	);
+	
+  $comment = t(
+		'<b>@type</b><br />
+		 @message<br />
+		 Amount: $@amount<br />',
+		array(
+			'@type' => $txntype, 
+			'@message' => $message,
+			'@amount' => $amount,
+		)
+	);
+	
+	if($approved)
+	{
+		uc_credit_log_prior_auth_capture($order->order_id, $data['auth_id']);
+		_uc_securepayxml_setData($order->order_id,$response,$mode);
+	}
+	
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	
+  return $result;
+}
+
+/****
+ * Ubercart Callback functions
+ ***/
+
+/**
+ * Implementation of hook_recurring_info().
+ *
+ * Sets up the module to work with uc_recurring
+ */
+function uc_securepayxml_recurring_info()
+{
+	$items['securepayxml'] = array(
+		'name' => t('SecurePay XML API (AU)'),
+		'payment method' => 'credit',
+		'module' => 'uc_securepayxml',
+		'fee handler' => 'securepayxml',
+		'renew callback' => 'uc_securepayxml_recurring_renew',
+		'process callback' => 'uc_securepayxml_recurring_process',
+		'menu' => array(
+			'charge' => UC_RECURRING_MENU_DEFAULT,
+			'edit'   => UC_RECURRING_MENU_DEFAULT,
+			'cancel' => UC_RECURRING_MENU_DEFAULT,
+		), // Use the default user operation defined in uc_recurring.
+	);
+	return $items;
+}
+
+/**
+ * Implemenation of hook_recurring_renew()
+ *
+ * This issues charges against a recurring account. It calls $txn->processTrigger($amount,$clientID) with relevant details from cart. Should be called automatically when cart's recurring conditions (uc_recurring) are met, usually by a cron job.
+ */
+function uc_securepayxml_recurring_renew($order, $fee)
+{
+	global $user;
+	$test = (variable_get('uc_securepayxml_mode', 'test')=='live'?false:true);
+	$mode = ($test?SECUREPAY_GATEWAY_MODE_PERIODIC_TEST:SECUREPAY_GATEWAY_MODE_PERIODIC_LIVE);
+	$txntype = t('Triggered payment');
+	
+	$txn = new securepay_xml_transaction($mode, variable_get('uc_securepayxml_merch_id',''), variable_get('uc_securepayxml_merch_pass',''), SP_LOCAL_ID_STRING);
+	
+	$amount = $fee->fee_amount;
+	
+	$result = $txn->processTrigger($amount,$fee->data['subscription_id']);
+	
+	$approved = strtoupper($txn->getResultByKeyName('approved'))=='YES'?true:false;
+	$txnResultCodeText = $txn->getErrorString();
+	
+	$message = ($approved?t('Approved'):$txnResultCodeText);
+	
+	$data = array();
+	
+  $comment = t(
+		'<b>@type</b><br />
+		 @message<br />
+		 @id<br />
+		 Amount: $@amount<br />',
+		array(
+			'@type' => $txntype,
+			'@message' => $message,
+			'@id' => $result,
+			'@amount' => $amount,
+		)
+	);
+	
+	if($approved)
+	{
+		uc_payment_enter($order->order_id, 'credit', $amount, $order->uid, $data, $message);
+		_uc_securepayxml_setData($order->order_id,$response,$mode);
+	}
+	
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	return $approved;
+}
+
+/**
+ * Callback for creating a recurring fee
+ *
+ * Create a triggered payment in securepay using an order's data.
+ * This is automatically called after a user purchases a recurring item, and the user is charged the default kind of payment for that order. The recurring amount and the initial amount can differ. A unique client id is created here, and stored in the $fee array ($fee->data['subscription_id']).
+ *
+ * @param $order
+ *   The order object containing billing and shipping information.
+ * @param $fee
+ *   An array of data describing the recurring fee.
+ * @return
+ *   TRUE or FALSE indicating the success of the request.
+ */
+function uc_securepayxml_recurring_process($order, &$fee)
+{
+	global $user;
+	$test = (variable_get('uc_securepayxml_mode', 'test')=='live'?false:true);
+	$mode = ($test?SECUREPAY_GATEWAY_MODE_PERIODIC_TEST:SECUREPAY_GATEWAY_MODE_PERIODIC_LIVE);
+	$txntype = t('New trigger');
+	
+	$txn = new securepay_xml_transaction($mode, variable_get('uc_securepayxml_merch_id',''), variable_get('uc_securepayxml_merch_pass',''), SP_LOCAL_ID_STRING);
+	
+  // Get a default SKU if none was supplied.
+  if (empty($fee->model))
+	{
+    $fee->model = db_result(db_query("SELECT model FROM {uc_products} WHERE nid = %d", $fee->nid));
+  }
+	$amount = $fee->fee_amount;
+  $fee->data['subscription_id'] = $order->uid . '-' . $order->order_id . '-' . uc_securepayxml_rand_char(4);
+
+	$approved = $txn->processStandardPeriodicAdd($amount, $fee->data['subscription_id'], SECUREPAY_PERIODIC_TRIGGERED, 0, "", 0,
+		$order->payment_details['cc_number'], $order->payment_details['cc_exp_month'], $order->payment_details['cc_exp_year'], $order->payment_details['cc_cvv']);
+	
+	$txnResultCodeText = $txn->getErrorString();
+	
+	$message = t('New Trigger approved');
+	
+	$message = ($approved?$message:$txnResultCodeText);	
+	$data = array('transaction_id'=>'');
+  $comment = t(
+		'<b>@type</b><br />
+		 @message<br />
+		 Amount: $@amount<br />
+		 ID: @id<br />',
+		array(
+			'@type' => $txntype,
+			'@message' => $message,
+			'@amount' => $amount,
+			'@id' => $fee->data['subscription_id'],
+		)
+	);
+	
+	if($approved)
+	{
+		uc_payment_enter($order->order_id, 'credit', 0, $order->uid, $data, $message);
+	}
+	
+	uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+	return $approved;
+}
+
+/****
+ * Assorted utility functions
+ ***/
+
+/* Creates a random alphanumeric string of the desired length. For client-id strings. */
+function uc_securepayxml_rand_char($length=5)
+{
+	$chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890';
+	$chars_length = 61;
+	
+	$string = $chars{rand(0, $chars_length)};
+	
+	for ($i = 1; $i < $length; $i = strlen($string))
+	{
+		$string .=  $chars{rand(0, $chars_length)};
+	}
+ 
+	return $string;
+}

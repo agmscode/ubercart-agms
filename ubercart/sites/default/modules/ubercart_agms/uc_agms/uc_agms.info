@@ -1,9 +1,12 @@
+; $Id: $
 name = Agms Gateway
-description = Processes payments using Agms Gatewat. 
+description = Processes payments using Agms Payment Gateway. 
 dependencies[] = uc_payment
 dependencies[] = uc_credit
 package = Ubercart - payment
 core = 6.x
 php = 5.0
 
-version = "6.x-0.1"
+version = "6.x-0.2"
+
+
