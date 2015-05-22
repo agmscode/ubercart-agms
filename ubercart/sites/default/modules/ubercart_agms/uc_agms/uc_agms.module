@@ -238,7 +238,7 @@ function _uc_agms_charge($order, $amount, $data) {
     'GatewayPassword' => variable_get('uc_agms_password', ''),
 
     // Transaction Information
-    'TransactionType' => ($preauth?t('authorize'):t('sale')),
+    'TransactionType' => ($preauth?t('auth'):t('sale')),
     'PaymentType' => 'creditcard',
 
     // Payment Information
@@ -341,7 +341,7 @@ function _uc_agms_charge($order, $amount, $data) {
       uc_credit_log_authorization($order->order_id, $response, $amount);
     }
     else{
-      _uc_agms_setData($order->order_id,$response,$mode);
+      _uc_agms_setData($order->order_id,$response['TRANS_ID'],$mode);
     }
     
     if ($data['txn_type'] == UC_CREDIT_PRIOR_AUTH_CAPTURE) {
@@ -363,7 +363,7 @@ function _uc_agms_charge($order, $amount, $data) {
     'type' => 'amount',
   );
   $comment = t('<b>@status:</b> @message<br />Amount: @amount<br />AVS response: @avs',
-    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@amount' => $params['Amount'], '@avs' => _uc_agms_avs($response['AVS_CODE'])));
+    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@amount' => $params['Amount'], '@avs' => _uc_agms_avs($response['AVS_CODE'][0])));
 
   
   // Save the comment to the order.
@@ -380,8 +380,8 @@ function _uc_agms_cancel_auth($order, $amount, $data) {
   global $user;
   $success = false;
   
-  $id = $data['auth_id'];
-
+  $id = $transaction_id = _uc_agms_getTransactionID($order->order_id);
+  
   // Build the params for the transaction.
   $params = array(
     // Merchant Information
@@ -393,7 +393,7 @@ function _uc_agms_cancel_auth($order, $amount, $data) {
     'PaymentType' => 'creditcard',
 
     // Transaction Id
-    'TransactionID' => $data['auth_id']
+    'TransactionID' => $transaction_id
   );
 
   $post_url = UC_AGMS_GATEWAY_TRANSACTION_URL;
@@ -458,10 +458,7 @@ function _uc_agms_cancel_auth($order, $amount, $data) {
     'type' => 'amount',
   );
   $comment = t('<b>@status:</b> @message<br />AVS response: @avs',
-    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'])));
-
-  // Log auth capture
-  uc_credit_log_prior_auth_capture($order->order_id, $id);
+    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'][0])));
 
   // Save the comment to the order.
   uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
@@ -475,9 +472,7 @@ function _uc_agms_cancel_auth($order, $amount, $data) {
 function _uc_agms_refund($order, $amount, $data) {
   global $user;
   $success = false;
-  
-  $id = $data['auth_id'];
-
+  $id = $transaction_id = _uc_agms_getTransactionID($order->order_id);
   // Build the params for the transaction.
   $params = array(
     // Merchant Information
@@ -489,7 +484,7 @@ function _uc_agms_refund($order, $amount, $data) {
     'PaymentType' => 'creditcard',
 
     // Transaction Id
-    'TransactionID' => $data['auth_id'],
+    'TransactionID' => $transaction_id,
 
     // Amount
     'Amount' => $amount
@@ -560,7 +555,7 @@ function _uc_agms_refund($order, $amount, $data) {
     'type' => 'amount',
   );
   $comment = t('<b>@status:</b> @message<br />AVS response: @avs',
-    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'])));
+    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'][0])));
 
   // Save the comment to the order.
   uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
@@ -576,8 +571,8 @@ function _uc_agms_capture($order, $amount, $data) {
   global $user;
   $success = false;
   
-  $id = $data['auth_id'];
-
+  $id = $transaction_id = _uc_agms_getTransactionID($order->order_id);
+  
   // Build the params for the transaction.
   $params = array(
     // Merchant Information
@@ -589,7 +584,7 @@ function _uc_agms_capture($order, $amount, $data) {
     'PaymentType' => 'creditcard',
 
     // Transaction Id
-    'TransactionID' => $data['auth_id'],
+    'TransactionID' => $transaction_id,
 
     // Amount
     'Amount' => $amount
@@ -651,7 +646,7 @@ function _uc_agms_capture($order, $amount, $data) {
     );
 
     uc_credit_log_prior_auth_capture($order->order_id, $data['auth_id']);
-    _uc_agms_setData($order->order_id,$response,$mode);
+    _uc_agms_setData($order->order_id,$response['TRANS_ID'],$mode);
     
   }
 
@@ -661,7 +656,7 @@ function _uc_agms_capture($order, $amount, $data) {
     'type' => 'amount',
   );
   $comment = t('<b>@status:</b> @message<br />AVS response: @avs',
-    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'])));
+    array('@status' => $result['success'] ? t('APPROVED') : t('DECLINED'), '@message' => $response['STATUS_MSG'], '@avs' => _uc_agms_avs($response['AVS_CODE'][0])));
 
   // Save the comment to the order.
   uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
