@@ -320,7 +320,7 @@ function _uc_agms_charge($order, $amount, $data) {
     // Fail the charge with the reason text in the decline message.
     $result = array(
       'success' => FALSE,
-      'message' => t('Credit card payment declined: @message', array('@message' => $response['STATUS_MSG'])),
+      'message' => t('HPP Hash Genereation declined: @message', array('@message' => $response['STATUS_MSG'])),
       'uid' => $user->uid,
     );
   }
