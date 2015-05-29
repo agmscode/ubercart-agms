@@ -20,7 +20,7 @@ function uc_agms_requirements($phase) {
   );
   if (!$has_curl) {
     $requirements['uc_agms_curl']['severity'] = REQUIREMENT_ERROR;
-    $requirements['uc_agms_curl']['description'] = $t("Agms Payment Gateway requires the PHP <a href='!curl_url'>cURL</a> library.", array('!curl_url' => 'http://php.net/manual/en/curl.setup.php'));
+    $requirements['uc_agms_curl']['description'] = $t("AGMS Gateway requires the PHP <a href='!curl_url'>cURL</a> library.", array('!curl_url' => 'http://php.net/manual/en/curl.setup.php'));
   }
 
   return $requirements;

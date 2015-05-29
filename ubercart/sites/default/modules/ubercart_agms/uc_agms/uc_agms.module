@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Process payments using Agms Gateway. 
+ * Process payments using the AGMS Gateway. 
  *
  */
 
@@ -20,8 +20,8 @@ define('UC_AGMS_GATEWAY_HOSTED_FORM_URL', 'https://gateway.agms.com/roxapi/AGMS_
 function uc_agms_payment_gateway() {
   $gateways[] = array(
     'id' => 'agms',
-    'title' => t('Agms Gateway'),
-    'description' => t('Process credit card payments using the Agms Gateway.'),
+    'title' => t('AGMS Gateway'),
+    'description' => t('Process credit card payments using the AGMS Gateway.'),
     'settings' => 'uc_agms_settings_form',
     'credit' => 'uc_agms_charge',
     'credit_txn_types' => array(
@@ -52,19 +52,19 @@ function uc_agms_settings_form() {
   );
   $form['api_key']['uc_agms_username'] = array(
     '#type' => 'textfield',
-    '#title' => t('Agms Gateway Username'),
+    '#title' => t('AGMS Gateway Username'),
     '#default_value' => variable_get('uc_agms_username', ''),
   );
   $form['api_key']['uc_agms_password'] = array(
     '#type' => 'textfield',
-    '#title' => t('Agms Gateway Password'),
+    '#title' => t('AGMS Gateway Password'),
     '#default_value' => variable_get('uc_agms_password', ''),
   );
   
   $form['api_key']['uc_agms_preauth'] = array(
     '#type' => 'select',
     '#title' => t('Transaction mode'),
-    '#description' => t('Select Standard if you want a customer\'s card to be charged at the point of sale. Select Preauthorised if you\'d like to review the order first, and manually issue the charge later via the orders page'),
+    '#description' => t('Select Standard if you want a customer\'s card to be charged at the point of sale. Select Authorization if you\'d like to review the order first, and manually capture the sale at a later time in the orders page.'),
     '#options' => array('standard'=>'Standard Payment','preauth'=>'Preauthorised Payment',),
     '#default_value' => variable_get('uc_agms_preauth', 'standard'),
   );
@@ -212,7 +212,7 @@ function uc_agms_charge($order_id, $amount, $data) {
 
 
 /**
- * Handles authorizations and captures through Transaction Process at Agms Gatewat
+ * Handles authorizations and captures through Transaction Process in the AGMS Gateway
  */
 function _uc_agms_charge($order, $amount, $data) {
   global $user;
@@ -221,7 +221,7 @@ function _uc_agms_charge($order, $amount, $data) {
   $preauth = ($data['txn_type']==UC_CREDIT_AUTH_ONLY?true:false);
   $txntype = ($preauth?t('Preauthorisation'):t('Standard payment'));
   
-  // Build a description of the order for logging in Agms Payment Gateway.
+  // Build a description of the order for logging in the AGMS Payment Gateway.
   $description = array();
   foreach ((array) $order->products as $product) {
     $description[] = $product->qty .'x '. $product->model;
@@ -374,7 +374,7 @@ function _uc_agms_charge($order, $amount, $data) {
 }
 
 /**
- * Handles authorizations and captures through Transaction Process at Agms Gatewat
+ * Handles authorizations and captures through Transaction Process in the AGMS Gateway
  */
 function _uc_agms_cancel_auth($order, $amount, $data) {
   global $user;
@@ -467,7 +467,7 @@ function _uc_agms_cancel_auth($order, $amount, $data) {
 }
 
 /**
- * Handles authorizations and captures through Transaction Process at Agms Gatewat
+ * Handles authorizations and captures through Transaction Process in the AGMS Gateway
  */
 function _uc_agms_refund($order, $amount, $data) {
   global $user;
@@ -565,7 +565,7 @@ function _uc_agms_refund($order, $amount, $data) {
 
 
 /**
- * Handles authorizations and captures through Transaction Process at Agms Gatewat
+ * Handles authorizations and captures through Transaction Process in the AGMS Gateway
  */
 function _uc_agms_capture($order, $amount, $data) {
   global $user;
@@ -718,7 +718,7 @@ function _uc_agms_buildRequestHeader($op='ProcessTransaction')
 }
 
 /**
- * Parse response from Agms Gateway
+ * Parse response from AGMS Gateway
  * @param $response, $op
  * @return array
  */
@@ -862,7 +862,7 @@ function _uc_agms_txn_map($type) {
 
 
 
-// Decrypts the login data for using Agms Payment Gateway APIs.
+// Decrypts the login data for using AGMS Gateway APIs.
 function _uc_agms_login_data() {
   static $data;
 
