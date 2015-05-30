@@ -1,16 +1,16 @@
-Agms Payment Gateway Module for Drupal/UberCart 2
+AGMS Payment Gateway Module for Drupal/UberCart 2
 Installation Guide
 ===================================================================
 
 Plugin Details:
 -------------------------------------------------------------------
 
-This plugin enables support for credit payments through the Agms Payemnt Gateway in Ubercart 2.x
+This plugin enables support for card payments through the AGMS Gateway in Ubercart 2.x
 
 It supports the following transaction types:
-	Standard Credit
-	Preauthorisation
-	Refund
+	- Sale
+	- Authorization
+	- Refund
 	
 
 
@@ -25,67 +25,65 @@ PHP cURL
 Manual Installation Instructions:
 -------------------------------------------------------------------
 
-These installation instructions assume that you have Ubercart installed, configured and working
+These installation instructions assume that you have Ubercart installed, configured, and working
 correctly.
 
 1. Extract the module archive into a temporary location.
 
-2. Copy the entire module folder (uc_agms) into drupal/sites/all/modules/
+2. Copy the entire "uc_agms" module folder into drupal/sites/all/modules/
 	
-3. Enable the module via Administer->Site Building->Modules
+3. Enable the payment module in Ubercart's Administer -> Site Building -> Modules
 
-4. Configure the module via Administer->Store administration->Configuration->Payment Settings
-->Payment Gateways
+4. Configure the module in Ubercart's Administer -> Store administration -> Configuration -> Payment Settings -> Payment Gateways
 
-5. Configure the Credit Cards module via Administer->Store administration->Configuration->
-Payment Settings->Payment Methods->Credit Card.
-	-Update the available credit cards to those supported by Agms Payment Gateway:
+5. Configure the Credit Cards module in Ubercart's Administer -> Store administration -> Configuration -> Payment Settings -> Payment Methods -> Credit Card.
+	5.1. Update the available credit cards to those supported by the AGMS Gateway:
 		Visa
-		Mastercard
+		MasterCard
+		Discover
 		American Express
 		Diners Club
 		JCB
-	-Set "Agms Payment Gateway" as the default payment gateway
+	5.2. Set AGMS Gateway as the default payment gateway
 
-6. Run some test transactions to ensure everything is working
-correctly with test credit card.
+6. Run a test transaction for a small amount to ensure everything is working
+correctly.
 
 
 
-Preauthorisation
+Authorization
 -------------------------------------------------------------------
 
-In Preauthorisation mode, the customer's card is not immediately charged, but is charged later after the store owner confirms the payment.
+In Authorization mode, the customer's card is not immediately charged, but is charged later when the store owner captures the sale.
 
-In order to issue the capture, use the credit-card terminal:
+In order to initiate the capture, use the credit card terminal in Ubercart:
 
-	-Go to Administer->Store administration->Orders->Order->Process card
+	- Navigate to Administer -> Store administration -> Orders -> Order -> Process card
 	
-	-Select the Authorisation
+	- Select Authorization
 	
-	-Edit the amount in "Charge Amount" as required. It can be any value up to the Authorisation
-		amount.
+	- Edit the amount in "Charge Amount" as required. It can be any value up to the amount Authorized.
 		
-	-Click "Capture amount to this authorisation"
+	- Click "Capture amount to this authorization"
 	
-As an Capture transaction can only be submitted once, be sure to double-check the details before
-clicking "Capture".
+A capture transaction can only be submitted once. Be sure to double check the details before
+clicking "Capture."
 	
-Alternatively, if you no longer require a preauthorisation, you can remove it with the "Void authorisation" button. This will not issue a gateway transaction, instead the transaction record in Ubercart's database will be deleted.
+Alternatively, if you no longer require an authorization, you can remove it by clicking the "Void authorization" button. This will not issue a transaction in the AGMS Gateway, and the transaction record in Ubercart's database will be deleted.
 
 
 
 Refunds
 -------------------------------------------------------------------
 
-To issue a refund from the credit-card terminal (order->process card):
+To issue a refund from the credit card terminal (order -> process card):
 
-	-Enter the amount to refund in "Charge Amount"
+	- Enter the amount to refund in "Charge Amount"
 	
-	-Click "Credit amount to this card"
+	- Click "Credit amount to this card"
 	
-And the refund will be issued against the last successful payment. If you need to issue a refund
-against a different payment, use the SecurePay merchant login.
+The refund will be issued against the last successful payment. If you need to issue a refund
+against a different payment, use login to the AGMS Gateway at https://gateway.agms.com/
 
 
 
@@ -93,13 +91,13 @@ against a different payment, use the SecurePay merchant login.
 Test Gateway Operation
 -------------------------------------------------------------------
 
-There is no seperate test gateway, the transaction are treated in test mode using the test card data.
+Test transactions can be run through a demo account provided by the AGMS Gateway. To request a dedicated demo account, please contact us at developers@agms.com.
 
 
 
 Support Contact
 -------------------------------------------------------------------
 
-If you experience any issues, please visit the Agms Payment Gateway website (http://www.onlinepaymentprocessing.com/) for our support contact details.
+If you experience any issues, please visit the http://www.onlinepaymentprocessing.com/ or contact us by phone 
 
 
