@@ -8,9 +8,9 @@ Plugin Details:
 This plugin enables support for card payments through the AGMS Gateway in Ubercart 2.x
 
 It supports the following transaction types:
-	Sale
-	Authorization
-	Refund
+	- Sale
+	- Authorization
+	- Refund
 	
 
 
@@ -40,6 +40,7 @@ correctly.
 	5.1. Update the available credit cards to those supported by the AGMS Gateway:
 		Visa
 		MasterCard
+		Discover
 		American Express
 		Diners Club
 		JCB
@@ -77,12 +78,12 @@ Refunds
 
 To issue a refund from the credit card terminal (order -> process card):
 
-	-Enter the amount to refund in "Charge Amount"
+	- Enter the amount to refund in "Charge Amount"
 	
-	-Click "Credit amount to this card"
+	- Click "Credit amount to this card"
 	
 The refund will be issued against the last successful payment. If you need to issue a refund
-against a different payment, use the SecurePay merchant login.
+against a different payment, use login to the AGMS Gateway at https://gateway.agms.com/
 
 
 
@@ -97,6 +98,6 @@ Test transactions can be run through a demo account provided by the AGMS Gateway
 Support Contact
 -------------------------------------------------------------------
 
-If you experience any issues, please visit the www.onlinepaymentprocessing.com or contact us by phone 
+If you experience any issues, please visit the http://www.onlinepaymentprocessing.com/ or contact us by phone 
 
 

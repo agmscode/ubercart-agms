@@ -49,6 +49,3 @@ function uc_agms_uninstall() {
 function uc_agms_update_last_removed() {
   return 3;
 }
-
-
-
